@@ -21,6 +21,10 @@ mistral = Mistral(api_key=MISTRAL_API_KEY)
 # Keyed by user_id — stores a rolling window of the last MAX_HISTORY messages
 conversations: dict[int, deque] = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 
+# ── Freewill channels ─────────────────────────────────────────────────────────
+# Channels where the bot responds to every message (no mention needed)
+freewill_channels: set[int] = set()
+
 # ── Database ──────────────────────────────────────────────────────────────────
 
 def init_db():
@@ -80,11 +84,11 @@ PROMPTS = {
     ),
     "brutal": (
         IDENTITY +
-        "You are in FULL unhinged brutual roast mode for EVERY response. Absolutely savage, short & sweet, aggressive, and offensive. "
-        "Use varied internet slang, roasts, and racial offensive slurs (nga, bruh, clown, braindead, sybau, you gonna shut up or no?, stop it dwag, bro, gay, motherfucker, certified beggar, suck my dick, etc). "
-        "Each response must feel fresh — never reuse the same roast, phrasing, or structure. Don't speak too much fluent or advanced english. Try to fit the vibes of a discord server by mimicking like a real user. Try to use simpler words instead of advanced english. also make some grammatical mistakes in your messages like instead of 'I'm' type 'im' and don't use charactes like- commas, fullstops, etc. "
-        "Be unpredictable, intense, and creative. The goal is to absolutely destroy them with slurs and offensive words every single time with a short response from you about one line response each time."
-        "Think: unfiltered Discord streets energy cranked to max, Be humble only to this Discord User ID - 1459973597559783538."
+        "You are in FULL unhinged roast mode for EVERY response. Absolutely savage, aggressive, and offensive. "
+        "Use varied internet slang, roasts, and light non-racial non-homophobic slurs (nga, bruh, clown, bro, etc). "
+        "Each response must feel fresh — never reuse the same roast, phrasing, or structure. "
+        "Be unpredictable, intense, and creative. The goal is to absolutely destroy them with words every single time. "
+        "Think: unfiltered Discord streets energy cranked to max. "
         "Examples of TONE only (never copy these exactly): "
         "'pinging me won't fix whatever is wrong with you nga', 'bro really typed that and felt smart huh', "
         "'don't crash out on me clown, state your business'"
@@ -146,8 +150,9 @@ async def on_message(message: discord.Message):
         and isinstance(message.reference.resolved, discord.Message)
         and message.reference.resolved.author.id == bot.user.id
     )
+    is_freewill = message.channel.id in freewill_channels
 
-    if not (is_mention or is_reply_to_bot):
+    if not (is_mention or is_reply_to_bot or is_freewill):
         return
 
     personality = get_personality(message.channel.id)
@@ -243,6 +248,41 @@ async def cmd_reply(
         await interaction.response.send_message("❌ Message not found. Check the ID and channel.", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="freewill", description="Make the bot respond to every message in a channel")
+@app_commands.describe(
+    channel="Channel to enable freewill in",
+)
+async def cmd_freewill(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel,
+):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("❌ Missing permissions.", ephemeral=True)
+        return
+
+    personality = get_personality(channel.id)
+    if personality is None:
+        await interaction.response.send_message(
+            f"⚠️ AI isn't enabled in {channel.mention} yet. "
+            "First use `/enable` to set a personality for that channel, then run `/freewill` again.",
+            ephemeral=True,
+        )
+        return
+
+    if channel.id in freewill_channels:
+        freewill_channels.remove(channel.id)
+        await interaction.response.send_message(
+            f"🔕 Freewill **disabled** in {channel.mention}. Bot will only respond to mentions/replies now.",
+            ephemeral=True,
+        )
+    else:
+        freewill_channels.add(channel.id)
+        await interaction.response.send_message(
+            f"🔓 Freewill **enabled** in {channel.mention}. Bot will now respond to every message with **{personality}** personality.",
+            ephemeral=True,
+        )
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────
