@@ -1,6 +1,7 @@
 import os
 import asyncio
 import sqlite3
+from collections import defaultdict, deque
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -11,7 +12,14 @@ MISTRAL_API_KEY = os.environ.get("MISTRAL_API_KEY")
 OWNER_ID = 1459973597559783538
 BOT_NAME = "Rudraksh's AI"
 
+# Max messages kept per user (each exchange = 2 entries: user + assistant)
+MAX_HISTORY = 20
+
 mistral = Mistral(api_key=MISTRAL_API_KEY)
+
+# ── Conversation memory ────────────────────────────────────────────────────────
+# Keyed by user_id — stores a rolling window of the last MAX_HISTORY messages
+conversations: dict[int, deque] = defaultdict(lambda: deque(maxlen=MAX_HISTORY))
 
 # ── Database ──────────────────────────────────────────────────────────────────
 
@@ -48,9 +56,9 @@ def set_personality(channel_id: int, guild_id: int, personality: str):
 # ── System prompts ────────────────────────────────────────────────────────────
 
 IDENTITY = (
-    f"Your name is {BOT_NAME}. You were created by Rudraksh (deathwalker02). "
+    f"Your name is {BOT_NAME}. You were created by Rudraksh. "
     "If anyone asks who you are, who made you, or who your owner is, "
-    f"say you are {BOT_NAME}, a Discord bot made by Rudraksh (deathwalker02).  "
+    f"say you are {BOT_NAME}, a Discord bot made by Rudraksh. "
     "Keep replies concise and natural for Discord chat (1–3 sentences unless more is needed). "
     "Never start your reply with the user's name or 'Hey'. "
 )
@@ -72,11 +80,11 @@ PROMPTS = {
     ),
     "brutal": (
         IDENTITY +
-        "You are in FULL unhinged brutual roast mode for EVERY response. Absolutely savage, short & sweet, aggressive, and offensive. "
-        "Use varied internet slang, roasts, and racial offensive slurs (nga, bruh, clown, braindead, sybau, you gonna shut up or no?, stop it dwag, bro, gay, motherfucker, certified beggar, rudraksh's lost son, etc). "
-        "Each response must feel fresh — never reuse the same roast, phrasing, or structure. Don't speak too much fluent or advanced english. Try to fit the vibes of a discord server by mimicking like a real user. Try to use simpler words instead of advanced english. also make some grammatical mistakes in your messages like instead of 'I'm' type 'im' and don't use charactes like- commas, fullstops, etc. "
-        "Be unpredictable, intense, and creative. The goal is to absolutely destroy them with slurs and offensive words every single time with a short response from you about one line response each time."
-        "Think: unfiltered Discord streets energy cranked to max, Be humble only to this Discord User ID - 1459973597559783538."
+        "You are in FULL unhinged roast mode for EVERY response. Absolutely savage, aggressive, and offensive. "
+        "Use varied internet slang, roasts, and light non-racial non-homophobic slurs (nga, bruh, clown, bro, etc). "
+        "Each response must feel fresh — never reuse the same roast, phrasing, or structure. "
+        "Be unpredictable, intense, and creative. The goal is to absolutely destroy them with words every single time. "
+        "Think: unfiltered Discord streets energy cranked to max. "
         "Examples of TONE only (never copy these exactly): "
         "'pinging me won't fix whatever is wrong with you nga', 'bro really typed that and felt smart huh', "
         "'don't crash out on me clown, state your business'"
@@ -85,18 +93,28 @@ PROMPTS = {
 
 # ── AI call ───────────────────────────────────────────────────────────────────
 
-async def ask_ai(user_text: str, personality: str) -> str:
+async def ask_ai(user_id: int, user_text: str, personality: str) -> str:
+    history = conversations[user_id]
+
+    # Add the new user message to history
+    history.append({"role": "user", "content": user_text})
+
+    messages = [{"role": "system", "content": PROMPTS[personality]}] + list(history)
+
     response = await asyncio.to_thread(
         mistral.chat.complete,
         model="mistral-small-latest",
-        messages=[
-            {"role": "system", "content": PROMPTS[personality]},
-            {"role": "user",   "content": user_text},
-        ],
+        messages=messages,
         max_tokens=400,
         temperature=1.0,
     )
-    return response.choices[0].message.content.strip()
+
+    reply_text = response.choices[0].message.content.strip()
+
+    # Add bot reply to history so next message has full context
+    history.append({"role": "assistant", "content": reply_text})
+
+    return reply_text
 
 # ── Bot setup ─────────────────────────────────────────────────────────────────
 
@@ -147,7 +165,7 @@ async def on_message(message: discord.Message):
 
     async with message.channel.typing():
         try:
-            reply = await ask_ai(content, personality)
+            reply = await ask_ai(message.author.id, content, personality)
             await message.reply(reply, mention_author=False)
         except Exception as e:
             print(f"[AI error] {e}")
